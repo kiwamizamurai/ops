@@ -1,0 +1,89 @@
+version: "3"
+
+services:
+  notebook:
+    build:
+      context: .
+      dockerfile: docker/notebook/Dockerfile
+    container_name: mj-notebook
+    ports:
+      - "8888:8888"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+    volumes:
+      - ./research:/home/jovyan/work
+    command: start-notebook.sh --NotebookApp.token=''
+    depends_on:
+      minio:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: docker/mlflow/Dockerfile
+    container_name: mj-mlflow
+    volumes:
+      - ./mlflow:/home/mlruns
+    ports:
+      - "5555:5000"
+    command: mlflow server --backend-store-uri 'mysql://mlflowuser:mlflowpassword@mysql:3306/mlflowdb' --default-artifact-root 'http://localhost:9000/' --host 0.0.0.0 --port 5000
+    restart: always
+    depends_on:
+      mysql:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:5.7
+    container_name: mj-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root-password
+      MYSQL_DATABASE: mlflowdb
+      MYSQL_USER: mlflowuser
+      MYSQL_PASSWORD: mlflowpassword
+    ports:
+      - 3306:3306
+    volumes:
+      - ./mysql:/var/lib/mysql
+      - ./docker/mysql/timeout.cnf:/etc/mysql/conf.d/timeout.cnf
+    healthcheck:
+        test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+        timeout: 20s
+        retries: 3
+
+  minio:
+    image: minio/minio:RELEASE.2022-02-26T02-54-46Z
+    container_name: mj-minio
+    ports:
+      - 9000:9000
+      - 9001:9001
+    restart: always
+    volumes:
+      - ./minio:/data
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniopass
+    command: server /data --console-address :9001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      retries: 3
+      interval: 5s
+
+  createbuckets:
+    image: minio/mc:RELEASE.2022-02-26T03-58-31Z
+    volumes:
+      - ./minio:/data
+    entrypoint: >
+      /bin/sh -c "
+      mc config host add minio http://minio:9000 minio miniopass;
+      mc mb minio/fake-s3;
+      mc policy set public minio/fake-s3;
+      exit 0;
+      "
+    depends_on:
+      minio:
+        condition: service_healthy

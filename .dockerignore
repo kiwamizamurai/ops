@@ -1,0 +1,7 @@
+data/
+.venv/
+log/
+minio/
+mysql/
+mlflow/
+research/
